@@ -1,0 +1,139 @@
+import cv2
+import numpy as np
+import time
+import pygame
+from cvzone.HandTrackingModule import HandDetector
+import cvzone
+import os
+
+pygame.init()
+pygame.mixer.init()
+
+# Load images
+image_paths = {
+    "background": "images/Background.jpg",
+    "game_over": "images/game_over.jpg",
+    "ball": "images/ball.jpg",
+    "left_bat": "images/left.jpg",
+    "right_bat": "images/right.jpg"
+}
+
+images = {}
+for name, path in image_paths.items():
+    if os.path.exists(path):
+        image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if image.shape[2] == 3:
+            alpha = np.ones((image.shape[0], image.shape[1], 1), dtype=image.dtype) * 255
+            image = np.concatenate((image, alpha), axis=2)
+        images[name] = image
+    else:
+        raise FileNotFoundError(f"Image not found: {path}")
+
+# Resize background
+imgBackground = cv2.resize(images["background"], (1280, 720))
+if imgBackground.shape[2] == 4:
+    imgBackground = cv2.cvtColor(imgBackground, cv2.COLOR_BGRA2BGR)
+
+# Hand detector (flipType=True for proper Left/Right)
+detector = HandDetector(detectionCon=0.7, maxHands=2)
+
+# Webcam setup
+cap = cv2.VideoCapture(0)
+cap.set(3, 1280)
+cap.set(4, 720)
+
+# Countdown
+def start_countdown():
+    for i in range(5, 0, -1):
+        success, frame = cap.read()
+        frame = cv2.flip(frame, 1)
+        frame = cv2.addWeighted(frame, 0.2, imgBackground, 0.8, 0)
+        cv2.putText(frame, "Get Ready", (480, 300), cv2.FONT_HERSHEY_DUPLEX, 2, (255, 255, 0), 4)
+        cv2.putText(frame, str(i), (620, 400), cv2.FONT_HERSHEY_DUPLEX, 4, (0, 255, 0), 5)
+        cv2.imshow("Coordination Game", frame)
+        cv2.waitKey(1000)
+
+# Game loop
+def play_game():
+    ballPos = [200, 200]
+    speedX = 11
+    speedY = 11
+    score = 0
+    gameOver = False
+    start_time = time.time()
+    end_time = start_time + 40
+
+    start_countdown()
+
+    while True:
+        success, img = cap.read()
+        if not success:
+            break
+
+        img = cv2.flip(img, 1)
+        hands, img = detector.findHands(img , flipType=False)  # flipType=True (default)
+        blended_bg = cv2.addWeighted(img, 0.2, imgBackground, 0.8, 0)
+
+        if hands:
+            for hand in hands:
+                x, y, w, h = hand['bbox']
+                h1, w1, _ = images["left_bat"].shape
+                y1 = y - h1 // 2
+                y1 = np.clip(y1, 20, 415)
+
+                if hand['type'] == "Left":
+                    blended_bg = cvzone.overlayPNG(blended_bg, images["left_bat"], (59, y1))
+                    if 59 < ballPos[0] < 59 + w1 and y1 < ballPos[1] < y1 + h1:
+                        speedX = -speedX
+                        ballPos[0] += 30
+                        score += 1
+
+                if hand['type'] == "Right":
+                    blended_bg = cvzone.overlayPNG(blended_bg, images["right_bat"], (1195, y1))
+                    if 1195 - 50 < ballPos[0] < 1195 and y1 < ballPos[1] < y1 + h1:
+                        speedX = -speedX
+                        ballPos[0] -= 30
+                        score += 1
+
+        if not gameOver:
+            if ballPos[1] >= 500 or ballPos[1] <= 10:
+                speedY = -speedY
+            ballPos[0] += speedX
+            ballPos[1] += speedY
+
+        if not gameOver:
+            blended_bg = cvzone.overlayPNG(blended_bg, images["ball"], ballPos)
+            cv2.putText(blended_bg, f"Score: {score}", (520, 650), cv2.FONT_HERSHEY_COMPLEX, 2, (0, 255, 255), 4)
+
+        time_left = int(end_time - time.time())
+        if time_left > 0 and not gameOver:
+            cv2.putText(blended_bg, f"Time Left: {time_left}s", (950, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3)
+        else:
+            gameOver = True
+
+        if gameOver or ballPos[0] < 40 or ballPos[0] > 1200:
+            blended_bg = images["game_over"].copy()
+            cv2.putText(blended_bg, f"{score}".zfill(2), (585, 360), cv2.FONT_HERSHEY_COMPLEX, 2.5, (200, 0, 200), 5)
+            cv2.putText(blended_bg, "Press 'R' to Restart or 'Q' to Quit", (300, 450), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            cv2.imshow("Coordination Game", blended_bg)
+
+            while True:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('r'):
+                    return True
+                elif key == ord('q'):
+                    return False
+
+        cv2.imshow("Coordination Game", blended_bg)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            return False
+
+# Main loop
+while True:
+    restart = play_game()
+    if not restart:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
